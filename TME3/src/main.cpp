@@ -9,7 +9,9 @@
 #include <ios>
 #include "HashMap.h"
 #include "FileUtils.h"
-
+#include <thread>          // <-- pour std::thread
+#include <atomic>
+// #include <mutex> 
 using namespace std;
 
 int main(int argc, char **argv)
@@ -21,7 +23,7 @@ int main(int argc, char **argv)
         // Optional third argument is num_threads (default 4).
         string filename = "../WarAndPeace.txt";
         string mode = "freqstd";
-        int num_threads=4;
+        int num_threads = 4;
         if (argc > 1)
                 filename = argv[1];
         if (argc > 2)
@@ -32,7 +34,7 @@ int main(int argc, char **argv)
         if (!check.is_open())
         {
                 cerr << "Could not open '" << filename << "'. Please provide a readable text file as the first argument." << endl;
-                cerr << "Usage: " << (argc > 0 ? argv[0] : "TME3") << " [path/to/textfile] [mode] [num threads]" << endl;
+                cerr << "Usage: " << (argc > 0 ? argv[0] : "TME3") << " [path/to/textfile] [mode]" << endl;
                 return 2;
         }
         check.seekg(0, std::ios::end);
@@ -88,7 +90,90 @@ int main(int argc, char **argv)
                 unique_words = pairs.size();
                 pr::printResults(total_words, unique_words, pairs, mode + ".freq");
 
-        } else {
+        } else if (mode =="partition"){
+                size_t total_words = 0;
+                size_t unique_words = 0;
+                std::unordered_map<std::string, int> um;
+
+                // Découpe le fichier en num_threads parties, sans couper de mots.
+                std::vector<std::streamoff> cuts = pr::partition(filename, file_size, num_threads);
+
+                // Pour chaque segment [cuts[i], cuts[i+1]), on traite exactement
+                // avec la même lambda que dans freqstdf.
+                for (size_t i = 0; i + 1 < cuts.size(); ++i) {
+                        pr::processRange(filename, cuts[i], cuts[i + 1], [&](const std::string& word) {
+                        total_words++;
+                        um[word]++;
+                        });
+                }
+
+                unique_words = um.size();
+                pairs.reserve(unique_words);
+                for (const auto& p : um) pairs.emplace_back(p);
+
+                pr::printResults(total_words, unique_words, pairs, mode + ".freq");
+
+        } else if (mode =="mt_naive"){
+                size_t total_words = 0;
+                size_t unique_words = 0;
+                std::unordered_map<std::string, int> um;
+
+                std::vector<std::streamoff> cuts = pr::partition(filename, file_size, num_threads);
+
+                std::vector<std::thread> ths;
+                
+                ths.reserve(cuts.size() > 0 ? cuts.size() - 1 : 0);
+
+                for (size_t i = 0; i + 1 < cuts.size(); ++i) {
+                ths.emplace_back([&, i]{
+                        pr::processRange(filename, cuts[i], cuts[i + 1], [&](const std::string& word) {
+
+                        total_words++;    // non thread-safe
+                        um[word]++;       // non thread-safe (unordered_map n'est pas thread-safe)
+                        });
+                });
+                }
+
+        
+                for (auto& t : ths) t.join();
+                unique_words = um.size();
+                pairs.reserve(unique_words);
+                for (const auto& p : um) pairs.emplace_back(p);
+
+                pr::printResults(total_words, unique_words, pairs, mode + ".freq");
+
+        }
+        else if (mode =="mt_atomic"){
+                atomic<size_t> total_words = 0;
+                size_t unique_words = 0;
+                std::unordered_map<std::string, int> um;
+
+                std::vector<std::streamoff> cuts = pr::partition(filename, file_size, num_threads);
+
+                std::vector<std::thread> ths;
+                
+                ths.reserve(cuts.size() > 0 ? cuts.size() - 1 : 0);
+
+                for (size_t i = 0; i + 1 < cuts.size(); ++i) {
+                ths.emplace_back([&, i]{
+                        pr::processRange(filename, cuts[i], cuts[i + 1], [&](const std::string& word) {
+
+                        total_words++;    // non thread-safe
+                        um[word]++;       // non thread-safe (unordered_map n'est pas thread-safe)
+                        });
+                });
+                }
+
+        
+                for (auto& t : ths) t.join();
+                unique_words = um.size();
+                pairs.reserve(unique_words);
+                for (const auto& p : um) pairs.emplace_back(p);
+
+                pr::printResults(total_words, unique_words, pairs, mode + ".freq");
+
+        }
+        else {
                 cerr << "Unknown mode '" << mode << "'. Supported modes: freqstd, freq, freqstdf" << endl;
                 return 1;
         }
@@ -99,4 +184,3 @@ int main(int argc, char **argv)
 
         return 0;
 }
-
